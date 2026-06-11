@@ -1,0 +1,64 @@
+---
+# Playbook para ativar interface em roteadores Cisco
+# Filename: enable_interface.yml
+
+- name: Ativar interface em roteador Cisco
+  hosts: "{{ target_host | default('cisco_routers') }}"
+  gather_facts: no
+  connection: network_cli
+
+  vars:
+    ansible_network_os: ios
+    interface_name: "{{ interface | default('GigabitEthernet0/1') }}"
+    reason: "{{ enable_reason | default('Interface reativada pelo sistema de automação') }}"
+
+  tasks:
+    - name: Obter informações da interface antes da ativação
+      ios_command:
+        commands:
+          - "show interface {{ interface_name }}"
+          - "show ip interface brief | include {{ interface_name }}"
+      register: interface_info
+      ignore_errors: yes
+
+    - name: Registrar estado atual da interface
+      set_fact:
+        interface_status: "{{ interface_info.stdout_lines | to_json }}"
+
+    - name: Ativar interface
+      ios_config:
+        lines:
+          - "description {{ reason }}"
+          - "no shutdown"
+        parents: "interface {{ interface_name }}"
+      register: enable_result
+
+    - name: Verificar status após ativação
+      ios_command:
+        commands:
+          - "show interface {{ interface_name }}"
+          - "show ip interface brief | include {{ interface_name }}"
+      register: post_enable_info
+      ignore_errors: yes
+
+    - name: Criar relatório de ação
+      set_fact:
+        action_report:
+          interface: "{{ interface_name }}"
+          host: "{{ inventory_hostname }}"
+          timestamp: "{{ ansible_date_time.iso8601 }}"
+          reason: "{{ reason }}"
+          status: "{{ 'success' if enable_result.changed else 'failed' }}"
+          pre_status: "{{ interface_status }}"
+          post_status: "{{ post_enable_info.stdout_lines | to_json }}"
+
+    - name: Exibir relatório de ação
+      debug:
+        var: action_report
+
+    - name: Salvar relatório em arquivo local
+      delegate_to: localhost
+      copy:
+        content: "{{ action_report | to_nice_json }}"
+        dest: "/tmp/enable_report_{{ inventory_hostname }}_{{ interface_name | replace('/', '_') }}.json"
+      when: save_report | default(true)

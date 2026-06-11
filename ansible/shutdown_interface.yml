@@ -1,0 +1,64 @@
+---
+# Playbook para shutdown de interface em roteadores Cisco
+# Filename: shutdown_interface.yml
+
+- name: Shutdown de interface em roteador Cisco
+  hosts: "{{ target_host | default('cisco_routers') }}"
+  gather_facts: no
+  connection: network_cli
+
+  vars:
+    ansible_network_os: ios
+    interface_name: "{{ interface | default('GigabitEthernet0/1') }}"
+    reason: "{{ shutdown_reason | default('Interface desativada devido a flapping detectado pelo sistema de automação') }}"
+
+  tasks:
+    - name: Obter informações da interface antes do shutdown
+      ios_command:
+        commands:
+          - "show interface {{ interface_name }}"
+          - "show ip interface brief | include {{ interface_name }}"
+      register: interface_info
+      ignore_errors: yes
+
+    - name: Registrar estado atual da interface
+      set_fact:
+        interface_status: "{{ interface_info.stdout_lines | to_json }}"
+
+    - name: Aplicar shutdown na interface
+      ios_config:
+        lines:
+          - "description {{ reason }}"
+          - "shutdown"
+        parents: "interface {{ interface_name }}"
+      register: shutdown_result
+
+    - name: Verificar status após shutdown
+      ios_command:
+        commands:
+          - "show interface {{ interface_name }}"
+          - "show ip interface brief | include {{ interface_name }}"
+      register: post_shutdown_info
+      ignore_errors: yes
+
+    - name: Criar relatório de ação
+      set_fact:
+        action_report:
+          interface: "{{ interface_name }}"
+          host: "{{ inventory_hostname }}"
+          timestamp: "{{ ansible_date_time.iso8601 }}"
+          reason: "{{ reason }}"
+          status: "{{ 'success' if shutdown_result.changed else 'failed' }}"
+          pre_status: "{{ interface_status }}"
+          post_status: "{{ post_shutdown_info.stdout_lines | to_json }}"
+
+    - name: Exibir relatório de ação
+      debug:
+        var: action_report
+
+    - name: Salvar relatório em arquivo local
+      delegate_to: localhost
+      copy:
+        content: "{{ action_report | to_nice_json }}"
+        dest: "/tmp/shutdown_report_{{ inventory_hostname }}_{{ interface_name | replace('/', '_') }}.json"
+      when: save_report | default(true)

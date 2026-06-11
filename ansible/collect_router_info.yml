@@ -1,0 +1,60 @@
+---
+# Playbook para coletar informações de roteadores Cisco
+# Filename: collect_router_info.yml
+
+- name: Coletar informações de roteadores Cisco
+  hosts: "{{ target_host | default('cisco_routers') }}"
+  gather_facts: no
+  connection: network_cli
+
+  vars:
+    ansible_network_os: ios
+    output_dir: "{{ output_directory | default('/tmp/cisco_info') }}"
+
+  tasks:
+    - name: Criar diretório de saída
+      delegate_to: localhost
+      file:
+        path: "{{ output_dir }}"
+        state: directory
+      run_once: true
+
+    - name: Coletar informações básicas do sistema
+      ios_command:
+        commands:
+          - "show version"
+          - "show running-config"
+          - "show inventory"
+          - "show ip interface brief"
+          - "show interfaces"
+          - "show ip route"
+          - "show processes cpu"
+          - "show processes memory"
+          - "show log | include Interface"
+      register: system_info
+
+    - name: Salvar informações em arquivos
+      delegate_to: localhost
+      copy:
+        content: "{{ item.stdout | join('\n\n') }}"
+        dest: "{{ output_dir }}/{{ inventory_hostname }}_{{ item.item | replace(' ', '_') | replace('|', '') }}.txt"
+      loop: "{{ system_info.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Criar relatório resumido
+      delegate_to: localhost
+      template:
+        src: router_summary.j2
+        dest: "{{ output_dir }}/{{ inventory_hostname }}_summary.json"
+      vars:
+        router_data:
+          hostname: "{{ inventory_hostname }}"
+          ip_address: "{{ ansible_host }}"
+          timestamp: "{{ ansible_date_time.iso8601 }}"
+          commands: "{{ system_info.results | map(attribute='item') | list }}"
+          files: "{{ system_info.results | map('extract', {'item': 'item'}) | map('replace', ' ', '_') | map('replace', '|', '') | map('regex_replace', '^(.*)$', inventory_hostname + '_\\1.txt') | list }}"
+
+    - name: Exibir resumo da coleta
+      debug:
+        msg: "Informações coletadas para {{ inventory_hostname }} e salvas em {{ output_dir }}"
